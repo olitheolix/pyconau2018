@@ -1,0 +1,9 @@
+# HTTP Client libraries.
+aiohttp
+requests
+
+# To get the K8s access token for Google Kubernetes Engine (GKE).
+google-auth
+
+# Miscellaneous.
+pyyaml
