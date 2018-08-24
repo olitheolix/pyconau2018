@@ -3,7 +3,8 @@ aiohttp
 requests
 
 # To get the K8s access token for Google Kubernetes Engine (GKE).
-google-auth
+google-api-python-client
 
 # Miscellaneous.
 pyyaml
+flask

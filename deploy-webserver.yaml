@@ -1,0 +1,231 @@
+# -----------------------------------------------------------------------------
+# Give yourself the RBAC permission to administrate permissions (requires
+# Kubernetes Admin IAM role in Google Cloud).
+# -----------------------------------------------------------------------------
+
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cluster-admins
+subjects:
+  - kind: User
+    # CHANGEME: must match the email you use to connect to GCloud.
+    name: olitheolix@gmail.com
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: ""
+
+---
+
+# -----------------------------------------------------------------------------
+# Create the "hello-world" namespace.
+# -----------------------------------------------------------------------------
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello-world
+
+---
+
+# -----------------------------------------------------------------------------
+# Define the `pycon-role` role and give it permission to query
+# information about namespaces, deployments, etc in the entire cluster. This
+# role will allow the `adjust_glb_timeout` pod to access the Kubernetes ingress
+# endpoint.
+#
+# NOTE: This cluster role grants more permissions than necessary to watch the
+# ingress. Use it as a template and tailor to your specific needs.
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pycon-role
+
+rules:
+- apiGroups: ["", "extensions"]
+  resources:
+  - namespaces                  # Core API
+  - pods                        # Core API
+  - deployments                 # Extensions
+  - ingresses                   # Extensions
+  verbs: ["get", "list", "create", "update", "patch", "delete", "watch"]
+
+---
+
+# -----------------------------------------------------------------------------
+# Create the "pycon-sa" service account. By itself this grants access to
+# nothing until we associate it with the above defined ClusterRole (see
+# ClusterRoleBinding step below).
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pycon-sa
+  namespace: hello-world
+
+---
+
+# -----------------------------------------------------------------------------
+# Grant the service account `pycon-sa` the permissions defined for
+# `pycon-role`. Now the service account credentials will actually
+# become useful for the pod that has access to it (next step).
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pycon-binding
+
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pycon-role
+
+subjects:
+- kind: ServiceAccount
+  name: pycon-sa
+  namespace: hello-world
+
+---
+
+# -----------------------------------------------------------------------------
+# Create a K8s service for the webserver.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: website
+  namespace: hello-world
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+  selector:
+    app: webserver
+
+---
+
+# -----------------------------------------------------------------------------
+# Deploy the hello-world webserver.
+# -----------------------------------------------------------------------------
+apiVersion: extensions/v1beta1
+kind: Deployment
+
+metadata:
+  name: webserver
+  namespace: hello-world
+
+spec:
+  replicas: 1
+
+  template:
+    metadata:
+      labels:
+        app: webserver
+
+    spec:
+      containers:
+        - name: hello
+          image: olitheolix/pyconau2018
+          imagePullPolicy: Always
+          command: ["python", "-u", "/src/webserver.py"]
+          ports:
+            - name: hello
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: hello
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 600
+
+---
+
+# -----------------------------------------------------------------------------
+# Deploy the Python script that will watch the ingress and update the
+# timeout values accordingly.
+# -----------------------------------------------------------------------------
+apiVersion: extensions/v1beta1
+kind: Deployment
+
+metadata:
+  name: adjust-glb-timeout
+  namespace: hello-world
+
+spec:
+  replicas: 1
+
+  template:
+    metadata:
+      labels:
+        app: glb_timeout
+
+    spec:
+      # Allow these container to use the Service Account credentials we
+      # configured earlier.
+      serviceAccountName: pycon-sa
+
+      containers:
+        - name: hello
+          image: olitheolix/pyconau2018
+          imagePullPolicy: Always
+          command: ["python", "-u", "/src/adjust_glb_timeout.py"]
+
+---
+
+# -----------------------------------------------------------------------------
+# Deploy a container that just sleeps in the default namespace.
+# This is a convenience container for the presentation only.
+# -----------------------------------------------------------------------------
+apiVersion: extensions/v1beta1
+kind: Deployment
+
+metadata:
+  name: sleeper
+  namespace: default
+
+spec:
+  replicas: 1
+
+  template:
+    metadata:
+      labels:
+        app: sleeper
+
+    spec:
+      containers:
+        - name: sleeper
+          image: alpine:latest
+          imagePullPolicy: Always
+          command: ["sleep", "1000d"]
+
+---
+
+# -----------------------------------------------------------------------------
+# Define the "webserver" ingress.
+# NOTE the custom "ingress.kubernetes.io/pycon-demo-timeout" annotation.
+# The "adjust_glb_timeout" pod will watch for ingress changes and inspect
+# that value to set a new load balancer timeout.
+# -----------------------------------------------------------------------------
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  namespace: hello-world
+  name: hello-adjust-timeout
+  annotations:
+    kubernetes.io/ingress.allow-http: "true"
+    ingress.kubernetes.io/pycon-demo-timeout: "60"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /*
+            backend:
+              serviceName: website
+              servicePort: 80

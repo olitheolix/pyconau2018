@@ -10,3 +10,5 @@ RUN pip install -r requirements.txt
 
 # Copy the repository into the container.
 ADD . .
+
+EXPOSE 80
